@@ -1,0 +1,425 @@
+REDACTED COPY: personal names, account and card numbers, and amounts from a real
+bank statement were replaced with placeholders. The original stays on the owner's PC.
+
+# Personal Finance Tool — Build Plan & AI Prompts
+
+## How to use this with free AI agents
+
+You build the app in 10 small prompts, each one a fresh chat, each one checked with a single command before you move on. The project's rules live in one file (`docs/SPEC.md`, below), so prompts stay short and every agent — Copilot, Gemini, ChatGPT — works from the same contract.
+
+**Recommended tool:** VS Code + GitHub Copilot Free in **Agent mode** (it can read and write files in your project). Use Gemini CLI / Gemini Code Assist free as a backup when Copilot's monthly quota runs out. Use ChatGPT/Gemini web chat only for debugging single errors.
+
+**Rules that save usage**
+
+1. One prompt = one new chat. Old chat history burns tokens and confuses the model.
+2. Always attach `docs/SPEC.md` plus only the files the prompt lists (in Copilot: type `#file:docs/SPEC.md`). In a web chat, paste SPEC.md above the prompt.
+3. Copy each prompt exactly. They already tell the agent: no explanations, full files only, don't touch other files.
+4. Run the **Check** command after every prompt. Only move on when it passes.
+5. If it fails, use the Fix prompt (last section) in a new chat with the error text — don't re-run the whole prompt.
+6. Commit after every passing step (`git add -A && git commit -m "step N"`), so a bad AI answer can be undone with `git checkout .`.
+7. Never paste your real bank statement into a cloud AI. Prompt 3 builds a fake statement in the same format for testing; your real file stays on your PC.
+
+## What the Xac Bank statement looks like
+
+The sample (one month, about 130 transaction rows) is one sheet, `AccountStatement`, where **every cell is text** — dates, amounts and balances included. The parser must convert them itself.
+
+**Layout**
+
+| Rows | Content | How to read it |
+| --- | --- | --- |
+| 1–8 | Header block: label in column A, value in column B; totals in F/G | Holder = B3, account no. = B5, currency = B7, period start/end = G6/G7 |
+| 9 | Column headers (Mongolian) | Find this row by searching for `Огноо`, don't hard-code row 9 |
+| next row | `Эхний үлдэгдэл` (opening balance) | Store as import metadata, not a transaction |
+| data rows | One transaction per row | See columns below |
+| last data row | `Эцсийн үлдэгдэл` (closing balance) | Stop here; ignore `Хэвлэсэн` footer rows |
+
+**Columns**
+
+| Col | Header | Meaning | Example |
+| --- | --- | --- | --- |
+| A | Огноо | Date `YYYY-MM-DD` | 2026-09-14 |
+| B | Гүйлгээний утга | Description | `13174691 UB 400000**0000 CU-334 LENIN CLUB` |
+| C | Харьцсан данс | Counterparty / account | `УЛААНБААТАР СМАРТ КАРТ ГОЛОМТ БАНК-8115105694` |
+| D | Гүйлгээний дугаар | Bank reference — unique, used to skip duplicates | SX0000000 |
+| E | Орлого | Income, `-` when empty | 100,000.00 |
+| F | Зарлага | Expense, `-` when empty | 4,750.00 |
+| G | Үлдэгдэл | Running balance | 250,000.00 |
+
+**Transaction types found**
+
+| Type | How to recognise it | Merchant / counterparty to extract |
+| --- | --- | --- |
+| Card POS | Description matches `<terminal> <city> 400000**0000 <MERCHANT>` | Text after the masked card number, e.g. `CU-334 LENIN CLUB` |
+| QPay | Description starts with `qpay` (any case) | Column C minus the trailing bank name and account digits, e.g. `АЗИ БРЮ ХАУС ХХК` |
+| Transfer in/out | Anything else with a person or company in column C | Column C name, e.g. `ДОРЖ БАТ` |
+| Own-account transfer | Column C ends with one of *your* account numbers (here 5000000002 and 100000000003) | Mark as transfer — not income, not expense |
+| Bank fee | `XACINFO ҮЙЛЧИЛГЭЭНИЙ ШИМТГЭЛ` (50₮ after almost every transaction), `Банк хоорондын шилжүүлгийн шимтгэл` (200₮), QPay `TRX:` charge to `ККТТ ХХК` | None — auto-classified |
+
+Two things the tool must handle: about half the rows are 50₮ XACINFO fees, so they should be auto-classified and hidden from the review screen; and the same shop appears with different branch numbers (`CU-334`, `CU-192`, `CU-224`), so rules need *contains/starts-with* matching, not only exact names.
+
+## Architecture
+
+A local Streamlit web app (opens in your browser at `localhost:8501`) on top of a local PostgreSQL database. No server, no login, one user. Streamlit is chosen because it is pure Python, needs no HTML/JS, and free AI agents write it reliably.
+
+**Stack:** Python 3.12 · PostgreSQL 16 · SQLAlchemy 2 (Core, with `text()` SQL) + psycopg 3 · pandas + openpyxl · Streamlit · python-dotenv · pytest.
+
+**Data flow on each upload**
+
+1. Upload `.xlsx` on the Upload page → file hash checked, so the same file can't be imported twice.
+2. Parser registry picks the bank parser (Xac now; Khan, Golomt, TDB later) → returns a list of standard transactions.
+3. Each row gets a type (pos / qpay / transfer / fee) and a normalised merchant name.
+4. Rows are inserted; rows whose `(account, bank_ref)` already exist are skipped (overlapping statements are safe).
+5. Auto-classifier applies rules, then merchant defaults.
+6. Classify page lists every **merchant that is still unclassified**, grouped, with count and total — you pick a category once and tick “remember” to create a rule for next time.
+7. Reports page: monthly income vs expense, spend by category, top merchants.
+
+**Folder layout**
+
+```
+fintrack/
+  app.py                  # Streamlit home + DB health check
+  pages/1_Upload.py  2_Classify.py  3_Transactions.py  4_Categories_Rules.py  5_Reports.py
+  core/
+    config.py  db.py  schema.sql  seed.py
+    merchant.py           # type detection + merchant extraction
+    classifier.py         # rule engine
+    importer.py           # parse -> dedupe -> insert -> classify
+    reports.py            # SQL for charts
+    parsers/__init__.py   # registry + detect_bank()
+    parsers/base.py       # Txn dataclass, BaseParser
+    parsers/xac.py
+  tests/  make_fixture.py  fixtures/  test_*.py
+  docs/SPEC.md
+  .env.example  requirements.txt  run.bat  README.md
+```
+
+**Database schema**
+
+| Table | Key columns | Notes |
+| --- | --- | --- |
+| banks | id, code UNIQUE, name | `xac` seeded |
+| accounts | id, bank\_id, account\_number, holder, currency, is\_own | UNIQUE(bank\_id, account\_number); your accounts get is\_own = true |
+| own\_account\_numbers | number UNIQUE | Your other account numbers, used to detect internal transfers |
+| categories | id, name, kind (income/expense/transfer), is\_default, is\_active | UNIQUE(name, kind); never hard-delete, only deactivate |
+| merchants | id, name UNIQUE, txn\_type, default\_category\_id | One row per normalised merchant/counterparty |
+| rules | id, field (merchant/description/counterparty), match (exact/contains/startswith/regex), pattern, direction (in/out/any), category\_id, priority | Lower priority number runs first |
+| imports | id, account\_id, file\_name, file\_sha256 UNIQUE, period\_start, period\_end, opening\_balance, closing\_balance, rows\_read, rows\_inserted, imported\_at | One per uploaded file |
+| transactions | id, account\_id, import\_id, txn\_date, description, counterparty, bank\_ref, amount NUMERIC(14,2), balance, txn\_type, merchant\_id, category\_id, classified\_by (rule/merchant/manual), note | UNIQUE(account\_id, bank\_ref); amount is **signed**: + income, − expense |
+
+## Classification
+
+Every transaction is classified in this order, and the first hit wins: **manual choice** (never overwritten) → **rules** by priority → **merchant default category** → left unclassified for the review screen. Re-running the classifier only touches rows that are unclassified or were classified by a rule/merchant.
+
+**Categories.** Your defaults are seeded, plus three I recommend adding because the statement needs them:
+
+- Income: Self-earned, Gift, Donation, *Other Income* (added)
+- Expense: Housing, Utilities, Restaurant, Groceries, Transportation, Healthcare & Medical, Debt Payments, Personal Care & Grooming, Family & Pet Care, Entertainment & Recreation, Clothing & Apparel, Savings & Investments, Gifts & Donations, Miscellaneous, *Bank Fees* (added — the 50₮/200₮ fees add up noticeably over a month)
+- Transfer: *Internal Transfer* (added — money moved between your own accounts must not count as income or expense)
+
+You can add, rename or deactivate categories on the Categories & Rules page.
+
+**Seed rules from your sample statement.** These are loaded by `seed.py`. “Sure” ones are safe; “Guess” ones are my reading of the merchant name — delete or change any that are wrong before running the seed.
+
+| Pattern | Field / match | Category | Confidence |
+| --- | --- | --- | --- |
+| `XACINFO` | description / startswith | Bank Fees | Sure |
+| `Банк хоорондын шилжүүлгийн шимтгэл` | description / startswith | Bank Fees | Sure |
+| `TRX:` | description / contains | Bank Fees | Sure |
+| `СМАРТ КАРТ` | counterparty / contains | Transportation | Sure (bus card) |
+| `OMSKYTEL` | merchant / contains | Utilities | Sure (mobile) |
+| `CU-` | merchant / startswith | Groceries | Sure |
+| `CARREFOUR`, `EMART`, `NOMINMACRO`, `NOMIN BUSNESS CLUB`, `VILLA MARKET`, `MINII DELGUUR`, `FOOD CITY`, `KHUNSNII` | merchant / contains | Groceries | Sure |
+| `ALTJIN` | merchant / startswith | Groceries | Guess |
+| `ZAKH`, `BARS ZAH` | merchant / contains | Groceries | Guess (market — could be clothing) |
+| `ZOLO DENT`, `FARM` | merchant / contains | Healthcare & Medical | Sure |
+| `SEZIS BUFFET`, `TSAINII GAZAR`, `MOMS TOUCH`, `BUBU CHIKEN`, `DESSERT`, `БРЮ ХАУС` | merchant / contains | Restaurant | Sure |
+| `TUTS` | merchant / contains | Restaurant | Guess (canteen) |
+| `GARAAR URLAKHUI` | merchant / contains | Entertainment & Recreation | Guess |
+| `AZOD ONLINE SHOP` | merchant / contains | Clothing & Apparel | Guess |
+| `EMEE` (incoming) | description / exact, direction in | Gift | Guess |
+
+**Left for you to classify manually** (no reliable clue in the name): ARIG BANK 6, STORE 1306, MK YARMAG, DALAI-GOOSAIKHAN, BUM KLMN, NSP 4054, IKH KHALZAN 2, 8 Ner, ӨСӨХ ЭНХЛЭН, ТОКИ ББСБ, and the person-to-person transfers in and out (e.g. money received from or sent to friends and family). These will appear on the Classify page after your first import — classify once, tick “remember”, and future statements handle them automatically.
+
+Your own accounts 5000000002 and 100000000003 go into `own_account_numbers`, so those transfers become Internal Transfer automatically.
+
+## Windows setup (do once, before Prompt 1)
+
+1. **Python 3.12** from python.org — tick “Add python.exe to PATH”.
+2. **PostgreSQL 16** from the EDB Windows installer. Remember the password you set for user `postgres`; keep port 5432. Skip Stack Builder.
+3. Open **SQL Shell (psql)** from the Start menu, log in, and run: `CREATE DATABASE fintrack;`
+4. **Git** for Windows and **VS Code**; in VS Code install the GitHub Copilot extension and sign in (Free plan). Switch the chat to **Agent** mode.
+5. Make a folder `C:\fintrack`, open it in VS Code, run `git init` in the terminal.
+6. Create `docs\SPEC.md` and paste the SPEC block from the next section into it.
+
+To stop PostgreSQL using memory when you don't need it, you can set the “postgresql-x64-16” service to *Manual* in Windows Services and start it before using the app; `run.bat` (Prompt 10) can start it for you.
+
+## SPEC.md (save as docs/SPEC.md)
+
+This is the contract every prompt refers to. It is written for AI agents: short, exact, no prose. Copy the whole block.
+
+```markdown
+# FinTrack SPEC (single source of truth)
+## Goal
+Local personal-finance app. One user, Windows laptop, no server. Import bank statement .xlsx -> PostgreSQL -> auto + manual classification -> reports.
+## Stack (do not change)
+Python 3.12, PostgreSQL 16, SQLAlchemy 2 Core with text() SQL (no ORM classes), psycopg[binary] 3, pandas, openpyxl, streamlit, python-dotenv, pytest.
+Config: .env -> DATABASE_URL=postgresql+psycopg://postgres:PASSWORD@localhost:5432/fintrack
+## Code rules
+- Type hints, small functions, no classes unless stated. Money = decimal.Decimal, DB NUMERIC(14,2). Never float.
+- All SQL parameterised. All DB access via core/db.py get_engine().
+- Text is UTF-8 Mongolian Cyrillic; never strip non-ASCII.
+- Output full file contents only. No explanations. Do not edit files not named in the task.
+## Layout
+app.py; pages/1_Upload.py 2_Classify.py 3_Transactions.py 4_Categories_Rules.py 5_Reports.py;
+core/{config.py,db.py,schema.sql,seed.py,merchant.py,classifier.py,importer.py,reports.py,ui.py,classify_service.py,admin_service.py};
+core/parsers/{__init__.py,base.py,xac.py}; tests/{make_fixture.py,fixtures/,test_*.py}
+## Schema (core/schema.sql, idempotent CREATE TABLE IF NOT EXISTS)
+banks(id serial pk, code text unique, name text)
+accounts(id serial pk, bank_id fk, account_number text, holder text, currency text default 'MNT', unique(bank_id,account_number))
+own_account_numbers(number text pk, label text)
+categories(id serial pk, name text, kind text check in('income','expense','transfer'), is_default bool default false, is_active bool default true, unique(name,kind))
+merchants(id serial pk, name text unique, txn_type text, default_category_id fk null)
+rules(id serial pk, field text check in('merchant','description','counterparty'), match text check in('exact','contains','startswith','regex'), pattern text, direction text check in('in','out','any') default 'any', category_id fk, priority int default 100, created_at timestamptz default now())
+imports(id serial pk, account_id fk, file_name text, file_sha256 text unique, period_start date, period_end date, opening_balance numeric(14,2), closing_balance numeric(14,2), rows_read int, rows_inserted int, imported_at timestamptz default now())
+transactions(id serial pk, account_id fk, import_id fk, txn_date date, description text, counterparty text, bank_ref text, amount numeric(14,2) /* +in -out */, balance numeric(14,2), txn_type text check in('pos','qpay','transfer','fee','other'), merchant_id fk null, category_id fk null, classified_by text check in('rule','merchant','manual') null, note text, unique(account_id,bank_ref))
+Indexes: transactions(txn_date), transactions(category_id), transactions(merchant_id).
+## Parser contract (core/parsers/base.py)
+@dataclass Txn: txn_date: date, description: str, counterparty: str, bank_ref: str, amount: Decimal, balance: Decimal
+@dataclass Statement: bank_code, account_number, holder, currency, period_start, period_end, opening_balance, closing_balance, txns: list[Txn]
+BaseParser: bank_code: str; can_parse(path)->bool; parse(path)->Statement
+Registry in parsers/__init__.py: PARSERS list; detect_parser(path) returns first that can_parse, else raise ValueError.
+## Xac Bank format (sheet 'AccountStatement', ALL cells are strings)
+Header label/value pairs: col A label, col B value: 'Дансны дугаар:'=account, 'Үндсэн эзэмшигч:'=holder, 'Валют:'=currency. Col F label, col G value: 'Эхлэх:'=start, 'Дуусах:'=end.
+Header row = row where col A == 'Огноо'. Columns A..G: Огноо(date YYYY-MM-DD), Гүйлгээний утга(description), Харьцсан данс(counterparty), Гүйлгээний дугаар(bank_ref), Орлого(in), Зарлага(out), Үлдэгдэл(balance).
+Amounts like '4,750.00'; '-' or empty = 0. amount = in - out.
+Row with description 'Эхний үлдэгдэл' = opening balance (balance col); 'Эцсийн үлдэгдэл' = closing balance, stop. Skip rows without bank_ref.
+can_parse: sheet title 'AccountStatement' and any cell in row 1 == 'ДАНСНЫ ХУУЛГА'.
+Validation: opening + sum(amount) must equal closing, else raise ValueError.
+## Type + merchant rules (core/merchant.py)
+Fee (check first): description startswith 'XACINFO' or 'Банк хоорондын шилжүүлгийн шимтгэл', or contains 'TRX:' -> 'fee', merchant None.
+POS: description matches r'^\S+\s+.*?\d{6}\*\*\d{4}\s+(.+)$' -> 'pos', merchant = group1.
+QPay: description lower startswith 'qpay' -> 'qpay', merchant = clean(counterparty).
+Else -> 'transfer', merchant = clean(counterparty).
+clean(cp): drop trailing '-<digits>'; drop trailing bank name (ХААН БАНК, ГОЛОМТ БАНК, ТӨРИЙН БАНК, ХАС БАНК, АРИГ БАНК, ТӨВ БАНК, КАПИТРОН БАНК, БОГД БАНК, ҮХОБ); collapse spaces; strip.
+normalize(name): upper, collapse spaces, strip. Merchant names stored normalized.
+## Classification order (core/classifier.py)
+1 classified_by='manual' -> never change. 2 counterparty ends with an own_account_numbers number -> 'Internal Transfer'. 3 rules by priority asc, id asc; direction in => amount>0, out => amount<0; match case-insensitive. 4 merchant.default_category_id. 5 leave NULL.
+## Default categories
+income: Self-earned, Gift, Donation, Other Income
+expense: Housing, Utilities, Restaurant, Groceries, Transportation, Healthcare & Medical, Debt Payments, Personal Care & Grooming, Family & Pet Care, Entertainment & Recreation, Clothing & Apparel, Savings & Investments, Gifts & Donations, Miscellaneous, Bank Fees
+transfer: Internal Transfer
+```
+
+## The prompts
+
+Feed these in order, one per new chat. Each ends with a **Check**; don't start the next prompt until it passes, then commit. In a web chat (no file access), replace `#file:...` with the pasted file contents. Prompts 5, 6 and 8 are the hardest — use the strongest model your free plan offers for those.
+
+### Prompt 1 — Skeleton and database
+
+```text
+Read #file:docs/SPEC.md and follow it exactly. Output full file contents only, no explanations.
+TASK 1: project skeleton + database.
+Create:
+- requirements.txt: sqlalchemy>=2.0, psycopg[binary]>=3.1, pandas>=2.2, openpyxl>=3.1, streamlit>=1.38, python-dotenv>=1.0, pytest>=8
+- .gitignore: .venv/, .env, __pycache__/, *.xlsx, !tests/fixtures/sample_xac.xlsx
+- .env.example: DATABASE_URL=postgresql+psycopg://postgres:CHANGE_ME@localhost:5432/fintrack ; TEST_DATABASE_URL=postgresql+psycopg://postgres:CHANGE_ME@localhost:5432/fintrack_test ; OWN_ACCOUNTS=5000000002,100000000003
+- core/__init__.py and core/parsers/__init__.py (empty)
+- core/config.py: load .env (python-dotenv, path = repo root). Expose DATABASE_URL: str, TEST_DATABASE_URL: str|None, OWN_ACCOUNTS: list[str] (split on comma, stripped). Raise RuntimeError with a clear message if DATABASE_URL is missing.
+- core/schema.sql: the SPEC schema exactly, with foreign keys and the 3 indexes, all CREATE ... IF NOT EXISTS.
+- core/db.py: get_engine(url: str|None = None) -> Engine (cache one engine per url, pool_pre_ping=True). init_db(engine=None): read schema.sql, split on ';', execute each non-empty statement in one transaction. Main block: init_db(), then print "DB OK" and the number of tables in schema public.
+Check (PowerShell): python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt ; copy .env.example .env (then set the password) ; python -m core.db  -> prints "DB OK 8"
+```
+
+### Prompt 2 — Seed categories and rules
+
+```text
+Read #file:docs/SPEC.md #file:core/db.py #file:core/config.py. Output full file contents only, no explanations.
+TASK 2: create core/seed.py. Must be idempotent (safe to run many times).
+seed(engine=None) does, in one transaction:
+1. Insert bank ('xac','Xac Bank') ON CONFLICT DO NOTHING.
+2. Insert all SPEC default categories with is_default=true ON CONFLICT (name,kind) DO NOTHING.
+3. Insert each config.OWN_ACCOUNTS into own_account_numbers ON CONFLICT DO NOTHING.
+4. Insert SEED_RULES only if no rule with the same (field, match, pattern, direction) exists. Resolve category by name.
+SEED_RULES (pattern | field | match | direction | category | priority):
+XACINFO|description|startswith|out|Bank Fees|10
+Банк хоорондын шилжүүлгийн шимтгэл|description|startswith|out|Bank Fees|10
+TRX:|description|contains|out|Bank Fees|10
+СМАРТ КАРТ|counterparty|contains|out|Transportation|50
+OMSKYTEL|merchant|contains|out|Utilities|50
+CU-|merchant|startswith|out|Groceries|100
+CARREFOUR, EMART, NOMINMACRO, NOMIN BUSNESS CLUB, VILLA MARKET, MINII DELGUUR, FOOD CITY, KHUNSNII, ZAKH, BARS ZAH|merchant|contains|out|Groceries|100  (one rule per pattern)
+ALTJIN|merchant|startswith|out|Groceries|100
+ZOLO DENT, FARM|merchant|contains|out|Healthcare & Medical|100
+SEZIS BUFFET, TSAINII GAZAR, MOMS TOUCH, BUBU CHIKEN, DESSERT, БРЮ ХАУС, TUTS|merchant|contains|out|Restaurant|100
+GARAAR URLAKHUI|merchant|contains|out|Entertainment & Recreation|100
+AZOD ONLINE SHOP|merchant|contains|out|Clothing & Apparel|100
+EMEE|description|exact|in|Gift|100
+Main block: seed(); print counts of categories, rules, own_account_numbers.
+Check: python -m core.seed  (run twice) -> both runs print categories=20 rules=29 own_account_numbers=2
+```
+
+### Prompt 3 — Xac parser and a fake test statement
+
+```text
+Read #file:docs/SPEC.md. Output full file contents only, no explanations.
+TASK 3: parser layer + synthetic fixture. Use openpyxl (data_only=True).
+Create:
+- core/parsers/base.py: Txn, Statement dataclasses and BaseParser exactly as SPEC "Parser contract".
+- core/parsers/xac.py: XacParser(BaseParser), bank_code='xac', per SPEC "Xac Bank format". Find header labels by text, not fixed rows. Parse '4,750.00' -> Decimal('4750.00'); '-', '', None -> Decimal('0'). Strip all text cells. Raise ValueError if balance validation fails.
+- core/parsers/__init__.py: PARSERS = [XacParser()]; detect_parser(path).
+- tests/make_fixture.py: build(path) writes a FAKE Xac-format file (sheet 'AccountStatement', every cell a string, same header block rows 1-8, header row 9, opening row, footer rows 'Хэвлэсэн:'). Fake holder 'ТЕСТ ХЭРЭГЛЭГЧ', account '5000000001'. 10 transactions with correct running balances, covering: 3 POS ('13174691 UB 400000**0000 CU-334 LENIN CLUB', '70114744 ULAANBAATAR 400000**0000 JUR UR FOOD CITY', 'AE000289 Khan-Uul 400000**0000 8 Ner'), each followed by a 50.00 'XACINFO ҮЙЛЧИЛГЭЭНИЙ ШИМТГЭЛ.' fee; 1 qpay pair ('QPAY 652579793673756 АЗИ БРЮ ХАУС ХХК 9500 TRX: 95.00 ₮' 95.00 + 'qpay 776268535611715, 06024-125-0070, MACR, CHARGE: 95.00 ₮' 9,405.00 to 'АЗИ БРЮ ХАУС ХХК ГОЛОМТ БАНК-1715206611'); 1 transfer in 60,000.00 'EMEE' from 'БАТ ДОРЖ ХААН БАНК-5600000000'; 1 transfer out 'ШИЛЖҮҮЛЭГ' 15,000.00 to 'ТЕСТ ХЭРЭГЛЭГЧ-5000000002'. bank_ref values unique like 'SX0000001'. Main block writes tests/fixtures/sample_xac.xlsx.
+- tests/conftest.py: fixture `xac_file` that calls build() into tmp_path.
+- tests/test_xac_parser.py: correct txn count (10), account, period, opening/closing, Decimal amounts and signs, detect_parser returns XacParser, tampered balance raises ValueError, can_parse False for an empty workbook. Plus one test that runs only if tests/fixtures/real_xac.xlsx exists (skip otherwise) and asserts parse() succeeds.
+Check: pytest tests/test_xac_parser.py -q  -> all pass. Then copy your real statement to tests/fixtures/real_xac.xlsx and run again (it stays local; .gitignore excludes it).
+```
+
+### Prompt 4 — Transaction type and merchant extraction
+
+```text
+Read #file:docs/SPEC.md. Output full file contents only, no explanations.
+TASK 4: create core/merchant.py and tests/test_merchant.py per SPEC "Type + merchant rules".
+Functions: normalize(s) -> str; clean_counterparty(cp) -> str; detect_type(description) -> str; extract_merchant(description, counterparty) -> tuple[str, str|None]  (txn_type, normalized merchant or None). Pure functions, no DB.
+Test cases (description | counterparty -> type, merchant):
+'13174691 UB 400000**0000 CU-334 LENIN CLUB' | 'PRCR/000000978953/14-09-2026 00:00:00/POS-100260040001' -> pos, 'CU-334 LENIN CLUB'
+'AE000289 Khan-Uul 400000**0000 8 Ner' | same style -> pos, '8 NER'
+'OMSKYTEL 90908989 400000**0000 OMSKYTEL' | same style -> pos, 'OMSKYTEL'
+'XACINFO ҮЙЛЧИЛГЭЭНИЙ ШИМТГЭЛ.' | 'Цахим банкны хураамжийн орлого-159422510001' -> fee, None
+'Банк хоорондын шилжүүлгийн шимтгэл' | any -> fee, None
+'QPAY 652579793673756 АЗИ БРЮ ХАУС ХХК 9500 TRX: 95.00 ₮' | 'ККТТ ХХК-5002092243' -> fee, None
+'qpay 776268535611715, 06024-125-0070, MACR, CHARGE: 95.00 ₮' | 'АЗИ БРЮ ХАУС ХХК ГОЛОМТ БАНК-1715206611' -> qpay, 'АЗИ БРЮ ХАУС ХХК'
+'qpay 896300400502986, 13302956, SALBAR1' | 'УЛААНБААТАР СМАРТ КАРТ ГОЛОМТ БАНК-8115105694' -> qpay, 'УЛААНБААТАР СМАРТ КАРТ'
+'ШИЛЖҮҮЛЭГ' | 'ТЕСТ ХЭРЭГЛЭГЧ-5000000002' -> transfer, 'ТЕСТ ХЭРЭГЛЭГЧ'
+'EMEE' | 'БАТ ДОРЖ ХААН БАНК-5600000000' -> transfer, 'БАТ ДОРЖ'
+Check: pytest tests/test_merchant.py -q -> all pass
+```
+
+### Prompt 5 — Rule engine
+
+```text
+Read #file:docs/SPEC.md #file:core/db.py. Output full file contents only, no explanations.
+TASK 5: create core/classifier.py and tests/test_classifier.py per SPEC "Classification order".
+Pure part (no DB):
+- Rule dataclass: id, field, match, pattern, direction, category_id, priority.
+- Ctx dataclass: rules (sorted priority asc, id asc), own_numbers: set[str], merchant_defaults: dict[int,int] (merchant_id -> category_id), internal_transfer_id: int.
+- rule_matches(rule, txn: dict) -> bool. txn keys: description, counterparty, merchant (normalized name or None), merchant_id, amount (Decimal). Compare stripped, upper-cased values. regex uses re.search with IGNORECASE; invalid regex = no match. direction in => amount>0, out => amount<0.
+- classify(txn, ctx) -> tuple[int|None, str|None]  (category_id, 'rule'|'merchant'|None). Own-account check first: counterparty ends with '-'+number for any own number -> (internal_transfer_id, 'rule').
+DB part:
+- load_ctx(conn) -> Ctx.
+- apply(conn, txn_ids: list[int]|None = None) -> int: load ctx, select transactions (with merchant name) where classified_by is distinct from 'manual' (and id = any(txn_ids) if given), classify each, UPDATE only rows whose result changed, return count updated. No match -> category_id NULL, classified_by NULL.
+Tests (pure functions only, build Ctx by hand): priority order wins; direction filter; contains/startswith/exact/regex; case-insensitivity; own-account transfer beats rules; merchant default used when no rule; no match -> (None, None).
+Check: pytest tests/test_classifier.py -q -> all pass
+```
+
+### Prompt 6 — Importer
+
+First create the test database once in psql: `CREATE DATABASE fintrack_test;`
+
+```text
+Read #file:docs/SPEC.md #file:core/db.py #file:core/seed.py #file:core/parsers/__init__.py #file:core/merchant.py #file:core/classifier.py. Output full file contents only, no explanations.
+TASK 6: create core/importer.py and tests/test_importer.py.
+@dataclass ImportResult: import_id: int|None, rows_read: int, inserted: int, skipped: int, unclassified: int, duplicate_file: bool, message: str.
+import_file(path, file_name: str, engine=None) -> ImportResult, ALL in one transaction (rollback on any error, re-raise):
+1. sha256 of file bytes. If imports.file_sha256 exists -> return duplicate_file=True, nothing written.
+2. stmt = detect_parser(path).parse(path).
+3. Get bank id by stmt.bank_code; upsert account (bank_id, account_number) and update holder/currency.
+4. Insert imports row (period, balances, rows_read=len(stmt.txns)).
+5. For each txn: txn_type, merchant = extract_merchant(description, counterparty). If merchant: INSERT INTO merchants(name, txn_type) ... ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id. INSERT transaction ... ON CONFLICT (account_id, bank_ref) DO NOTHING RETURNING id; collect new ids.
+6. Update imports.rows_inserted. classifier.apply(conn, new_ids).
+7. unclassified = count of new ids with category_id NULL.
+CLI: python -m core.importer <file.xlsx> -> runs init_db, seed, import_file, prints the result.
+Tests: use config.TEST_DATABASE_URL (pytest.skip if None). Fixture: engine for test DB, drop all tables (DROP SCHEMA public CASCADE; CREATE SCHEMA public), init_db, seed. Tests: import the synthetic file -> inserted=10; every fee row has category 'Bank Fees'; the '-5000000002' transfer is 'Internal Transfer'; 'EMEE' is 'Gift'; CU-334 is 'Groceries'; importing the same file again -> duplicate_file=True and still 10 rows; a second fixture file with a different holder line but the same bank_refs -> inserted=0, skipped=10.
+Check: pytest -q -> all tests pass. Then: python -m core.importer tests\fixtures\real_xac.xlsx -> prints inserted=128
+```
+
+### Prompt 7 — Home and Upload pages
+
+```text
+Read #file:docs/SPEC.md #file:core/db.py #file:core/seed.py #file:core/importer.py. Output full file contents only, no explanations.
+TASK 7: Streamlit home + upload. Use st.set_page_config(layout="wide") on every page. Use @st.cache_resource for a function setup() that runs init_db() and seed() once.
+- app.py: title "FinTrack"; call setup(); 4 st.metric: transactions, unclassified, this month's expense, last import date. st.page_link to each page in pages/.
+- core/ui.py: shared helpers: engine() (cached), fmt_mnt(Decimal|float) -> '1,234,567₮', category_options(conn) -> list of (id, label) where label = 'Expense · Groceries' for active categories ordered kind, name.
+- pages/1_Upload.py: st.file_uploader(type=['xlsx'], accept_multiple_files=True) + "Import" button. Save each to a tempfile, call import_file, then show st.success (inserted/skipped), st.info for duplicate_file, st.error with the message on exception (one bad file must not stop the others). After importing, if any unclassified: st.warning("N transactions from M merchants need a category") + st.page_link to pages/2_Classify.py. Below: import history table (file, account, period, rows_read, rows_inserted, imported_at desc).
+Check: streamlit run app.py -> upload your real statement -> success with every row inserted; upload again -> "already imported".
+```
+
+### Prompt 8 — Classify page (manual classification)
+
+```text
+Read #file:docs/SPEC.md #file:core/ui.py #file:core/classifier.py. Output full file contents only, no explanations.
+TASK 8: create pages/2_Classify.py and core/classify_service.py (all SQL lives in the service; the page only renders).
+Service:
+- unclassified_groups(conn) -> DataFrame: unclassified transactions (category_id IS NULL) grouped by merchant_id and direction ('in' if amount>0 else 'out'). Columns: merchant_id, merchant (or '(no merchant)'), txn_type, direction, count, total (sum abs amount), first_date, last_date, example (one description). Order by total desc.
+- assign_group(conn, merchant_id, direction, category_id, remember: bool) -> int: set category_id + classified_by='manual' on matching unclassified rows. If remember: insert rule (field='merchant', match='exact', pattern=merchant name, direction = 'any' for pos/qpay, else the group's direction, priority=50) unless an identical rule exists. Return rows updated.
+- group_transactions(conn, merchant_id, direction) -> DataFrame of those rows (id, date, description, counterparty, amount).
+- set_category(conn, txn_ids, category_id) -> manual.
+Page:
+- Header with count of unclassified rows and merchants; if zero show st.success("All transactions are classified").
+- st.data_editor of the groups: read-only columns + editable 'category' (SelectboxColumn, options = category labels from category_options) + 'remember' (CheckboxColumn, default True). Hide merchant_id.
+- "Save" button: for each row with a category chosen call assign_group in one transaction; show how many rows and rules were saved; st.rerun().
+- Below: selectbox to pick one group -> st.data_editor of its transactions with a per-row category column -> "Save these" uses set_category (for one-off exceptions).
+Check: open Classify -> your real statement shows about 17 merchant groups (ARIG BANK 6, STORE 1306, the person transfers...). Classify 2 with remember ticked -> they disappear, and 2 new rules appear in the rules table.
+```
+
+### Prompt 9 — Transactions and Categories & Rules pages
+
+```text
+Read #file:docs/SPEC.md #file:core/ui.py #file:core/classifier.py #file:core/classify_service.py. Output full file contents only, no explanations.
+TASK 9: create pages/3_Transactions.py, pages/4_Categories_Rules.py and core/admin_service.py (all SQL in the service).
+3_Transactions: sidebar filters: date range (default this month), account, category (multi, includes 'Unclassified'), txn_type, text search (ILIKE on description/counterparty/merchant), checkbox "hide bank fees" (default on). Show metrics: income, expense, net for the filter (exclude kind='transfer'). st.data_editor with editable category (SelectboxColumn) and note; "Save changes" writes only edited rows, classified_by='manual'. st.download_button CSV of the filtered rows.
+4_Categories_Rules: three st.tabs.
+- Categories: table (name, kind, active, txn count). Form to add (name, kind). Rename and activate/deactivate via data_editor. Never delete a category that has transactions or rules; allow delete only when count is 0.
+- Rules: st.data_editor(num_rows="dynamic") of rules (pattern, field, match, direction, category label, priority). On save: validate (pattern not empty, regex compiles when match='regex'), then insert/update/delete. Button "Re-run auto-classification" -> classifier.apply(conn) on all non-manual rows, show count changed. Button "Test a rule": inputs field/match/pattern -> show up to 20 matching transactions.
+- My accounts: list/add/remove own_account_numbers (used for Internal Transfer).
+Check: add category "Education" (expense); add rule ARIG BANK -> Restaurant; Re-run -> rows change; Transactions page filter by Restaurant shows them.
+```
+
+### Prompt 10 — Reports, launcher, README
+
+```text
+Read #file:docs/SPEC.md #file:core/ui.py. Output full file contents only, no explanations.
+TASK 10: create core/reports.py, pages/5_Reports.py, run.bat, README.md.
+reports.py (pandas.read_sql with text(), params; exclude categories of kind 'transfer' from income/expense everywhere):
+- monthly_summary(conn, start, end) -> month, income, expense, net
+- by_category(conn, start, end, kind) -> category, total, pct, count  (unclassified shown as 'Unclassified')
+- top_merchants(conn, start, end, n=15) -> merchant, count, total (expenses only)
+- daily_balance(conn, account_id, start, end) -> date, balance (last balance per day)
+5_Reports: date range (default Jan 1 this year .. today) + account select. Metrics: income, expense, net, savings rate %. st.bar_chart monthly income vs expense; horizontal bar of expense by category sorted desc + table with %; income by category table; top merchants table; st.line_chart daily balance. Format money with fmt_mnt.
+run.bat: cd /d "%~dp0" ; net start postgresql-x64-16 >nul 2>&1 ; call .venv\Scripts\activate ; streamlit run app.py --server.headless false
+README.md (short): Windows setup steps, monthly workflow (download statement from Xac e-banking as Excel -> Upload -> Classify -> Reports), backup command: pg_dump -U postgres -Fc fintrack > backup_YYYYMMDD.dump, how to add a bank (point to docs/SPEC.md and the parser contract).
+Check: double-click run.bat -> browser opens; Reports shows September/October 2026 bars and category breakdown for your real data.
+```
+
+## When something breaks, and adding banks later
+
+**Fix prompt** — use in a new chat whenever a Check fails. Paste only the last \~30 lines of the error; the full traceback wastes quota.
+
+```text
+Read #file:docs/SPEC.md #file:<the file named in the error>.
+Running `<the check command>` fails with:
+<last 30 lines of the error>
+Fix the cause only. Change as few lines as possible. Do not refactor or rename anything. Output only the changed file(s), full contents, no explanations.
+```
+
+**New feature prompt** — for small additions after the 10 steps (e.g. budgets, a second account).
+
+```text
+Read #file:docs/SPEC.md and #file:<files involved>.
+TASK: <one feature, one sentence>.
+Files to create/edit: <list>. Keep all existing behaviour and tests passing.
+Add/adjust tests in tests/test_<name>.py. Also update the matching section of docs/SPEC.md.
+Output full file contents only, no explanations.
+Check: pytest -q
+```
+
+**Add-a-bank prompt** — one per bank (Khan, Golomt, TDB…). First describe the bank's Excel layout with *fake* values: open the file, note the sheet name, the header-row text, what each column means, date format, how income/expense are shown (two columns or one signed column), and where opening/closing balances are.
+
+```text
+Read #file:docs/SPEC.md #file:core/parsers/base.py #file:core/parsers/xac.py #file:core/parsers/__init__.py #file:tests/make_fixture.py.
+TASK: add a parser for <Bank name>, bank_code '<code>'.
+Format: sheet '<name>'; header row contains '<text>'; columns: <A=date (DD.MM.YYYY), B=..., ...>; amounts <format>; income/expense <how>; opening/closing balance <where>; account number <where>.
+Create core/parsers/<code>.py (BaseParser subclass, same validation as Xac), register it in PARSERS, add the bank row '<code>' to the bank insert in core/seed.py, create tests/make_fixture_<code>.py and tests/test_<code>_parser.py mirroring the Xac ones. Append a "<Bank> format" section (max 8 lines) to docs/SPEC.md. If card descriptions differ from Xac, extend core/merchant.py detect_type/extract_merchant with new patterns and tests, without breaking existing tests.
+Output full file contents only, no explanations.
+Check: pytest -q
+```
+
+If you'd like, send me a new bank's statement later and I can write that bank's format description for you, the same way I did for Xac.

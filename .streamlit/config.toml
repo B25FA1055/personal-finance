@@ -1,0 +1,3 @@
+[client]
+# The sidebar menu is drawn by core.ui.page() so its labels can be translated.
+showSidebarNavigation = false

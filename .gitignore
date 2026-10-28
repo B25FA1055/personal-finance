@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+*.xlsx
+*.xls
+*.csv
+*.dump
+
+# Personal data - never publish
+FinTrack_Plan_and_Prompts.txt
+backups/
+.streamlit/secrets.toml
