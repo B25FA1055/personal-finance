@@ -93,9 +93,6 @@ def theme_selector() -> None:
         on_change=remember_choice,
     )
     sync_url("theme", current_theme(), DEFAULT_THEME)
-    # Canvas tables and date pickers follow Streamlit's own light/dark base, not CSS.
-    if palette().dark and st.context.theme.type != "dark":
-        st.sidebar.caption(t("theme_dark_tip"))
 
 
 def apply_theme() -> None:
@@ -103,8 +100,8 @@ def apply_theme() -> None:
     p = palette()
     css = _card_css(p)
     if current_theme() != DEFAULT_THEME:
-        css = _css(p) + css
-    st.html(f"<style>{css}</style>")
+        css = _css(p) + _grid_css(p, st.context.theme.type == "dark") + css
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 def _mix(a: str, b: str, weight_b: float) -> str:
@@ -190,6 +187,15 @@ def _card_css(p: Palette) -> str:
 """
 
 
+def _grid_css(p: Palette, base_dark: bool) -> str:
+    """Tables are drawn on a canvas in Streamlit's own light/dark base colours, which CSS
+    cannot restyle. When the palette is dark and that base is light (or the reverse),
+    invert the canvas; hue-rotate keeps colours like the primary red the same hue."""
+    if p.dark == base_dark:
+        return ""
+    return '[data-testid="stDataFrame"] canvas { filter: invert(0.92) hue-rotate(180deg); }\n'
+
+
 def _css(p: Palette) -> str:
     primary_buttons = (
         '[data-testid="stBaseButton-primary"], '
@@ -197,17 +203,36 @@ def _css(p: Palette) -> str:
     )
     secondary_buttons = (
         '[data-testid="stBaseButton-secondary"], '
-        '[data-testid="stBaseButton-secondaryFormSubmit"]'
+        '[data-testid="stBaseButton-secondaryFormSubmit"], '
+        '[data-testid="stPopoverButton"]'
     )
-    inputs = (
-        '[data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"], '
-        '[data-baseweb="select"] > div, [data-baseweb="input"] input, textarea'
+    # Cover both Streamlit's current React Aria fields and BaseWeb wrappers.
+    input_boxes = (
+        '[data-testid="stTextInputRootElement"], [data-testid="stNumberInputContainer"], '
+        '[data-testid="stDateInputField"], [data-testid="stSelectbox"] [role="group"], '
+        '[data-testid="stTextArea"] > div, [data-testid="stTextArea"] [data-baseweb="textarea"], '
+        '[data-testid="stChatInput"] > div, [data-baseweb="input"] > div, '
+        '[data-baseweb="textarea"] > div, [data-baseweb="select"] > div'
+    )
+    input_text = (
+        '[data-testid="stTextInputField"], [data-testid="stNumberInputField"], '
+        '[data-testid="stSelectbox"] input, [data-testid="stDateInputField"] [role="spinbutton"], '
+        '[data-testid="stTextArea"] textarea, [data-testid="stChatInputTextArea"], '
+        '[data-baseweb="input"] input, [data-baseweb="textarea"] textarea, textarea'
+    )
+    # Pop-ups render outside the page body, so they get the palette explicitly.
+    overlays = (
+        '[data-testid="stSelectboxVirtualDropdown"], [data-testid="stDateInputCalendar"], '
+        '[data-testid="stPopoverBody"], [data-testid="stTooltipContent"], [data-testid="stToast"], '
+        '[data-testid="stElementToolbarButtonContainer"]'
     )
     return f"""
 :root {{
   --ft-primary: {p.primary}; --ft-bg: {p.background}; --ft-secondary: {p.secondary};
   --ft-text: {p.text}; --ft-border: {p.border}; --ft-sidebar: {p.sidebar};
   --ft-sidebar-text: {p.sidebar_text}; --ft-sidebar-input: {p.sidebar_input};
+  --ft-muted: {_mix(p.text, p.secondary, 0.4)}; --ft-hover: {_mix(p.secondary, p.text, 0.08)};
+  --ft-tint: {_mix(p.secondary, p.primary, 0.22)};
 }}
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stHeader"] {{
   background-color: var(--ft-bg);
@@ -225,7 +250,7 @@ def _css(p: Palette) -> str:
   border-right: 1px solid var(--ft-border);
 }}
 [data-testid="stSidebar"] * {{ color: var(--ft-sidebar-text) !important; }}
-[data-testid="stSidebar"] [data-baseweb="select"] > div {{
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [role="group"] {{
   background-color: var(--ft-sidebar-input) !important;
   border-color: var(--ft-border) !important;
 }}
@@ -250,25 +275,113 @@ def _css(p: Palette) -> str:
   color: var(--ft-primary) !important;
 }}
 
-/* Inputs, uploader, dropdown menus */
-{inputs} {{
+[data-testid="stBaseButton-tertiary"] {{ color: var(--ft-text) !important; }}
+[data-testid="stBaseButton-tertiary"]:hover {{ color: var(--ft-primary) !important; }}
+
+/* Inputs: text, number, date, selectbox, chat */
+{input_boxes} {{
   background-color: var(--ft-secondary) !important;
-  color: var(--ft-text) !important;
-  border-color: var(--ft-border) !important;
+  border: 1px solid var(--ft-border) !important;
 }}
+:is({input_boxes}):focus-within {{ border-color: var(--ft-primary) !important; }}
+{input_text} {{
+  background-color: transparent !important;
+  color: var(--ft-text) !important;
+  caret-color: var(--ft-text);
+}}
+.stApp input:not([type="checkbox"]):not([type="radio"]),
+.stApp textarea,
+.stApp [role="combobox"] {{
+  color: var(--ft-text) !important;
+  caret-color: var(--ft-text);
+}}
+:is({input_text})::placeholder {{ color: var(--ft-muted) !important; opacity: 1; }}
+[data-testid="stDateInputField"] span:not([role="spinbutton"]),
+[data-testid="stNumberInputContainer"] button, [data-testid="stSelectbox"] [role="group"] button {{
+  color: var(--ft-muted) !important;
+}}
+[data-testid="stNumberInputContainer"] button:hover {{
+  background-color: var(--ft-hover) !important;
+  color: var(--ft-text) !important;
+}}
+[data-testid="stBottom"] > div {{ background-color: var(--ft-bg) !important; }}
 [data-testid="stFileUploaderDropzone"] {{
   background-color: var(--ft-secondary);
   border: 1px dashed var(--ft-primary);
 }}
-[data-baseweb="popover"] ul, [data-baseweb="popover"] li {{
-  background-color: var(--ft-secondary);
-  color: var(--ft-text);
+[data-testid="stFileUploaderDropzoneInstructions"] span {{ color: var(--ft-muted) !important; }}
+
+/* Pop-ups: dropdown list, date picker, popover, tooltip, toast, table toolbar */
+{overlays} {{
+  background-color: var(--ft-secondary) !important;
+  color: var(--ft-text) !important;
+  border: 1px solid var(--ft-border);
 }}
+:is([data-testid="stSelectboxVirtualDropdown"], [data-testid="stDateInputCalendar"])
+  [role="option"], [data-testid="stDateInputCalendar"] [role="gridcell"] > [role="button"] {{
+  background-color: transparent !important;
+  color: var(--ft-text) !important;
+}}
+:is({overlays}) :is(p, label, h2, th, header, button, [role="option"], [role="button"]) {{
+  color: var(--ft-text) !important;
+}}
+[data-testid="stSelectboxVirtualDropdown"] [role="option"]:hover,
+[data-testid="stSelectboxVirtualDropdown"] [role="option"]:hover > div {{
+  background-color: var(--ft-hover) !important;
+}}
+[data-testid="stDateInputCalendar"] header svg,
+[data-testid="stDateInputCalendar"] [data-outside-month="true"],
+[data-testid="stElementToolbarButtonContainer"] button {{ color: var(--ft-muted) !important; }}
+[data-testid="stDateInputCalendar"] [role="gridcell"] > [role="button"]:hover {{
+  background-color: var(--ft-hover);
+}}
+[data-testid="stDateInputCalendar"] [data-selected="true"] {{
+  background-color: var(--ft-primary) !important;
+  color: #ffffff !important;
+}}
+
+/* Segmented controls and pills */
+[data-testid="stButtonGroup"] button {{
+  background-color: var(--ft-secondary) !important;
+  border-color: var(--ft-border) !important;
+  color: var(--ft-text) !important;
+}}
+[data-testid="stButtonGroup"] button:hover {{ border-color: var(--ft-primary) !important; }}
+[data-testid="stButtonGroup"] button[aria-checked="true"] {{
+  background-color: var(--ft-tint) !important;
+  border-color: var(--ft-primary) !important;
+}}
+
+/* Radio buttons: an unselected circle takes the input colour, a selected one the primary. */
+[data-testid="stRadioOption"]:not(:has(input:checked)) > div > div:first-child,
+[data-testid="stRadioOption"]:not(:has(input:checked)) > div > div:first-child > div {{
+  background-color: var(--ft-secondary) !important;
+  border-color: var(--ft-border) !important;
+}}
+[data-testid="stSidebar"] [data-testid="stRadioOption"]:not(:has(input:checked)) > div > div:first-child,
+[data-testid="stSidebar"] [data-testid="stRadioOption"]:not(:has(input:checked)) > div > div:first-child > div {{
+  background-color: var(--ft-sidebar-input) !important;
+}}
+[data-testid="stRadioOption"]:has(input:checked) > div > div:first-child {{
+  background-color: var(--ft-primary) !important;
+  border-color: var(--ft-primary) !important;
+}}
+
+/* Expanders, forms, chat, JSON */
+[data-testid="stExpander"] details, [data-testid="stForm"] {{
+  background-color: var(--ft-secondary);
+  border-color: var(--ft-border) !important;
+}}
+[data-testid="stExpander"] summary {{ background-color: var(--ft-secondary) !important; color: var(--ft-text); }}
+[data-testid="stExpander"] summary:hover {{ background-color: var(--ft-hover) !important; }}
+[data-testid="stChatMessage"] {{ background-color: var(--ft-secondary); }}
+[data-testid="stJson"] .react-json-view {{ background-color: transparent !important; }}
 
 /* Tabs, metrics, progress, tables, alerts */
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{ color: var(--ft-primary); }}
 [data-baseweb="tab-highlight"] {{ background-color: var(--ft-primary); }}
 [data-baseweb="tab-border"] {{ background-color: var(--ft-border); }}
+[data-testid="stProgressBarTrack"] {{ background-color: var(--ft-border) !important; }}
 [data-testid="stProgress"] div[role="progressbar"] > div > div {{
   background-color: var(--ft-primary) !important;
 }}

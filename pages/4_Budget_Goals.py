@@ -38,6 +38,7 @@ with tab_budget:
     with db.connect() as conn:
         categories = expense_categories(conn)
         progress = monthly_budget_progress(conn, budget_month)
+        savings_totals = goal_service.monthly_funding_totals(conn, budget_month)
         show_budget_alerts(conn, budget_month, link=False)
 
     st.subheader(t("monthly_budgets", month=f"{budget_month:%Y-%m}"))
@@ -99,24 +100,40 @@ with tab_budget:
     budgeted = [item for item in progress if item["monthly_limit"] is not None]
     unbudgeted = [item for item in progress if item["monthly_limit"] is None and item["spent"] > 0]
 
-    # Budget vs actual chart
-    if budgeted:
+    # Budget vs actual chart, including the savings plan for this month.
+    if budgeted or savings_totals["planned"] or savings_totals["actual"]:
         with st.container(border=True, key="card_budget_vs_actual"):
             st.subheader(t("budget_vs_actual"))
             colors = palette()
             limit_label, spent_label = t("col_monthly_limit"), t("m_spent")
+            comparison = [
+                {
+                    "category": category_name(item["category"]),
+                    "planned": item["monthly_limit"],
+                    "actual": item["spent"],
+                }
+                for item in budgeted
+            ]
+            comparison.append(
+                {
+                    "category": category_name(goal_service.SAVINGS),
+                    "planned": savings_totals["planned"],
+                    "actual": savings_totals["actual"],
+                }
+            )
             chart_data = pd.DataFrame(
                 [
-                    {"category": category_name(item["category"]), "type": label, "amount": float(value)}
-                    for item in budgeted
-                    for label, value in ((limit_label, item["monthly_limit"]), (spent_label, item["spent"]))
+                    {"category": item["category"], "type": label, "amount": float(value)}
+                    for item in comparison
+                    for label, value in ((limit_label, item["planned"]), (spent_label, item["actual"]))
                 ]
             )
+            category_order = [item["category"] for item in comparison]
             chart = (
                 alt.Chart(chart_data)
                 .mark_bar(cornerRadiusEnd=3)
                 .encode(
-                    y=alt.Y("category:N", title=None, sort=[category_name(i["category"]) for i in budgeted]),
+                    y=alt.Y("category:N", title=None, sort=category_order),
                     yOffset=alt.YOffset("type:N", sort=[limit_label, spent_label]),
                     x=alt.X("amount:Q", title="₮", axis=alt.Axis(format=",.0f", tickCount=5)),
                     color=alt.Color(
@@ -130,12 +147,33 @@ with tab_budget:
                         alt.Tooltip("amount:Q", title=t("col_amount"), format=",.0f"),
                     ],
                 )
-                .properties(height=min(320, max(160, 46 * len(budgeted))))  # compact: at most 320px
+                .properties(height=min(320, max(160, 46 * len(comparison))))  # compact: at most 320px
             )
             st.altair_chart(style_chart(chart), width="stretch", theme=None)
 
     # Progress per budgeted category
     st.subheader(t("spending_progress"))
+    if savings_totals["planned"] > 0:
+        with st.container(border=True):
+            ratio = savings_totals["actual"] / savings_totals["planned"]
+            st.markdown(f"**{category_name(goal_service.SAVINGS)}**")
+            st.progress(
+                min(float(ratio), 1.0),
+                text=t(
+                    "progress_of",
+                    spent=fmt_mnt(savings_totals["actual"]),
+                    limit=fmt_mnt(savings_totals["planned"]),
+                    pct=f"{ratio:.0%}",
+                ),
+            )
+            if ratio >= 1:
+                st.success(t("goal_savings_plan_met"))
+            else:
+                st.info(t("goal_savings_plan_remaining", amount=fmt_mnt(
+                    savings_totals["planned"] - savings_totals["actual"]
+                )))
+    elif savings_totals["actual"] > 0:
+        st.info(t("goal_savings_unplanned", amount=fmt_mnt(savings_totals["actual"])))
     if not budgeted:
         st.info(t("no_budgets_yet"))
     for item in budgeted:
@@ -177,16 +215,22 @@ with tab_goals:
     with db.connect() as conn:
         goals = goal_service.goal_progress(conn, today)
         unassigned = goal_service.unassigned_savings(conn)
+        funding_sources = {
+            goal["id"]: goal_service.list_goal_funding_sources(conn, goal["id"])
+            for goal in goals
+        }
 
     if goals:
         total_monthly = sum((g["monthly_needed"] for g in goals if g["status"] not in ("done",)), Decimal("0"))
-        c1, c2, c3 = st.columns(3)
+        total_planned = sum((g["monthly_plan"] for g in goals), Decimal("0"))
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric(t("goal_m_saved"), fmt_mnt(sum((g["saved"] for g in goals), Decimal("0"))), border=True,
                   icon=":material/savings:")
         c2.metric(t("goal_m_target"), fmt_mnt(sum((g["target"] for g in goals), Decimal("0"))), border=True,
                   icon=":material/flag:")
         c3.metric(t("goal_m_monthly"), fmt_mnt(total_monthly), border=True, icon=":material/calendar_month:",
                   help=t("goal_monthly_help"))
+        c4.metric(t("goal_m_planned"), fmt_mnt(total_planned), border=True, icon=":material/account_balance:")
 
     with st.expander(t("create_goal"), expanded=not goals, icon=":material/add:"):
         with st.form("create_savings_goal", clear_on_submit=True):
@@ -223,14 +267,122 @@ with tab_goals:
                 text=t("progress_of", spent=fmt_mnt(goal["saved"]), limit=fmt_mnt(goal["target"]),
                        pct=f"{goal['percent']:.0f}%"),
             )
-            m1, m2, m3 = st.columns(3)
-            m1.metric(t("goal_monthly_needed"), fmt_mnt(goal["monthly_needed"]) if goal["status"] != "done" else "—")
-            m2.metric(t("goal_months_left"), goal["months_left"])
-            m3.metric(t("m_remaining"), fmt_mnt(goal["remaining"]))
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                t("goal_monthly_needed"),
+                fmt_mnt(goal["monthly_needed"]) if goal["status"] != "done" else "—",
+                help=t("goal_monthly_help"),
+            )
+            m2.metric(t("goal_planned_monthly"), fmt_mnt(goal["monthly_plan"]))
+            m3.metric(t("goal_plan_shortfall"), fmt_mnt(goal["shortfall"]))
+            m4.metric(
+                t("goal_projected_date"),
+                goal["projected_month"].strftime("%Y-%m") if goal["projected_month"] else "—",
+            )
+            st.caption(
+                t(
+                    "goal_plan_status_" + goal["plan_status"],
+                    amount=fmt_mnt(goal["shortfall"]),
+                    extra=fmt_mnt(goal["extra_per_month"]),
+                )
+            )
             st.caption(
                 t("goal_breakdown", start=fmt_mnt(goal["starting"]), contributed=fmt_mnt(goal["contributed"]),
                   count=goal["contributions"], deadline=goal["deadline"], expected=f"{goal['expected_percent']:.0f}")
             )
+            with st.expander(t("goal_funding_sources"), icon=":material/account_balance:"):
+                st.caption(t("goal_funding_help"))
+                source_rows = funding_sources[goal["id"]]
+                source_table = pd.DataFrame(
+                    {
+                        "name": [row["name"] for row in source_rows],
+                        "kind": [row["kind"] for row in source_rows],
+                        "amount": [float(row["amount"]) for row in source_rows],
+                        "start_month": [row["start_month"] for row in source_rows],
+                        "end_month": [row["end_month"] for row in source_rows],
+                    }
+                )
+                if source_table.empty:
+                    source_table = pd.DataFrame(
+                        {
+                            "name": [""],
+                            "kind": [None],
+                            "amount": [None],
+                            "start_month": [None],
+                            "end_month": [None],
+                        }
+                    )
+                with st.form(f"goal_funding_form_{goal['id']}"):
+                    edited_sources = st.data_editor(
+                        source_table,
+                        hide_index=True,
+                        width="stretch",
+                        num_rows="dynamic",
+                        column_config={
+                            "name": st.column_config.TextColumn(
+                                t("goal_funding_source"), max_chars=100, required=True
+                            ),
+                            "kind": st.column_config.SelectboxColumn(
+                                t("goal_funding_kind"),
+                                options=goal_service.FUNDING_KINDS,
+                                format_func=lambda kind: t(f"goal_funding_kind_{kind}"),
+                                required=True,
+                            ),
+                            "amount": st.column_config.NumberColumn(
+                                t("goal_funding_amount"),
+                                min_value=0.01,
+                                step=1000.0,
+                                format="localized",
+                                required=True,
+                            ),
+                            "start_month": st.column_config.DateColumn(
+                                t("goal_funding_start"),
+                                format="YYYY-MM",
+                                default=today.replace(day=1),
+                                required=True,
+                            ),
+                            "end_month": st.column_config.DateColumn(
+                                t("goal_funding_end"),
+                                format="YYYY-MM",
+                            ),
+                        },
+                        key=f"goal_funding_editor_{goal['id']}",
+                    )
+                    save_funding = st.form_submit_button(t("goal_funding_save"))
+                if save_funding:
+                    source_plan: list[dict] = []
+                    incomplete = False
+                    for row in edited_sources.itertuples():
+                        name = "" if pd.isna(row.name) else str(row.name).strip()
+                        kind = "" if pd.isna(row.kind) else str(row.kind)
+                        amount = None if pd.isna(row.amount) else Decimal(str(row.amount))
+                        start_month = None if pd.isna(row.start_month) else row.start_month
+                        end_month = None if pd.isna(row.end_month) else row.end_month
+                        if not name and not kind and amount is None and start_month is None and end_month is None:
+                            continue
+                        if not name or not kind or amount is None or start_month is None:
+                            incomplete = True
+                            break
+                        source_plan.append(
+                            {
+                                "name": name,
+                                "kind": kind,
+                                "amount": amount,
+                                "start_month": start_month,
+                                "end_month": end_month,
+                            }
+                        )
+                    if incomplete:
+                        st.error(t("goal_funding_incomplete"))
+                    else:
+                        try:
+                            with db.begin() as conn:
+                                goal_service.save_goal_funding_sources(conn, goal["id"], source_plan)
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.session_state["budget_flash"] = t("goal_funding_saved")
+                            st.rerun()
             with st.form(f"goal_form_{goal['id']}"):
                 starting = st.number_input(t("goal_starting"), min_value=0.0, step=10000.0,
                                            value=float(goal["starting"]), key=f"goal_start_{goal['id']}",
@@ -262,6 +414,14 @@ with tab_goals:
     else:
         goal_names = {g["id"]: g["name"] for g in goals}
         default_goal = goals[0]["name"] if len(goals) == 1 else None
+        funding_source_labels = {}
+        for goal_id, sources in funding_sources.items():
+            for source in sources:
+                label = (
+                    f"{goal_names[goal_id]} · {source['name']} "
+                    f"({t('goal_funding_kind_' + source['kind'])})"
+                )
+                funding_source_labels[label] = (goal_id, source["id"])
         table = pd.DataFrame(
             {
                 "id": [u["id"] for u in unassigned],
@@ -269,6 +429,7 @@ with tab_goals:
                 "description": [u["description"] for u in unassigned],
                 "amount": [float(u["amount"]) for u in unassigned],
                 "goal": [default_goal] * len(unassigned),
+                "funding_source": [""] * len(unassigned),
             }
         )
         edited = st.data_editor(
@@ -283,14 +444,31 @@ with tab_goals:
                 "description": t("col_description"),
                 "amount": st.column_config.NumberColumn(t("col_amount"), format="localized"),
                 "goal": st.column_config.SelectboxColumn(t("assign_goal"), options=list(goal_names.values())),
+                "funding_source": st.column_config.SelectboxColumn(
+                    t("assign_funding_source"),
+                    options=["", *funding_source_labels],
+                    required=False,
+                ),
             },
         )
         if st.button(t("assign_save"), type="primary"):
             ids_by_name = {name: gid for gid, name in goal_names.items()}
-            assignments = {
-                int(row.id): ids_by_name[row.goal] for row in edited.itertuples() if pd.notna(row.goal)
-            }
-            with db.begin() as conn:
-                count = goal_service.assign(conn, assignments)
-            st.session_state["budget_flash"] = t("assigned_n", count=count)
-            st.rerun()
+            assignments: dict[int, tuple[int, int | None]] = {}
+            invalid_source = False
+            for row in edited.itertuples():
+                if pd.isna(row.goal):
+                    continue
+                goal_id = ids_by_name[row.goal]
+                label = "" if pd.isna(row.funding_source) else str(row.funding_source)
+                source_goal_id, source_id = funding_source_labels.get(label, (goal_id, None))
+                if label and source_goal_id != goal_id:
+                    invalid_source = True
+                    break
+                assignments[int(row.id)] = (goal_id, source_id if label else None)
+            if invalid_source:
+                st.error(t("assign_source_goal_mismatch"))
+            else:
+                with db.begin() as conn:
+                    count = goal_service.assign(conn, assignments)
+                st.session_state["budget_flash"] = t("assigned_n", count=count)
+                st.rerun()

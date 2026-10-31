@@ -3,10 +3,12 @@
 from datetime import date
 from decimal import Decimal
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import Connection, Engine, text
 
 from core.budget_service import budget_alerts
+from core.classify_service import reset_to_automatic, set_transaction_categories
 from core.i18n import category_name, language_selector, t
 from core.recurring import log_cash_payment, run_check, settle
 from core.theme import apply_theme, theme_selector
@@ -159,3 +161,94 @@ def category_options(conn: Connection) -> list[tuple[int, str]]:
         (row.id, f"{t('kind_' + row.kind)} · " + (f"{category_name(row.parent)} › {category_name(row.name)}" if row.parent else category_name(row.name)))
         for row in rows
     ]
+
+
+def category_editor(
+    transactions: pd.DataFrame, categories: list[tuple[int, str]], key: str, flash_key: str
+) -> None:
+    """Editable transaction table (from classification_transactions) with a save bar.
+
+    A changed category is saved as a manual override, which automatic classification
+    never touches again; the "back to automatic" choice removes the override.
+    """
+    label_to_id = {label: category_id for category_id, label in categories}
+    id_to_label = {category_id: label for category_id, label in categories}
+    auto_label = t("classify_auto_option")
+    type_labels = {code: t(f"type_{code}") for code in ("pos", "qpay", "transfer", "fee", "cash", "other")}
+    source_labels = {
+        "Automatic rule": t("src_rule"),
+        "Automatic default": t("src_merchant"),
+        "Manual": t("src_manual"),
+        "Unclassified": t("src_none"),
+    }
+    original_ids = {
+        int(row.id): None if pd.isna(row.category_id) else int(row.category_id)
+        for row in transactions.itertuples()
+    }
+    manual_ids = {int(i) for i in transactions.loc[transactions["classified_by"] == "Manual", "id"]}
+    # Category and its source come before the long description, so they stay in view.
+    editable = pd.DataFrame(
+        {
+            "id": transactions["id"],
+            "date": transactions["date"],
+            "merchant": transactions["merchant"],
+            "amount": transactions["amount"].astype(float),
+            "category": [id_to_label.get(original_ids[int(i)]) for i in transactions["id"]],
+            "classified_by": transactions["classified_by"].map(source_labels),
+            "description": transactions["description"],
+            "txn_type": transactions["txn_type"].map(type_labels).fillna(transactions["txn_type"]),
+        }
+    )
+    version = st.session_state.get(f"{key}_version", 0)
+    # Edits are stored by row position: a new row set (search, filter) needs a fresh editor.
+    rows = hash(tuple(original_ids)) & 0xFFFFFFFF
+    edited = st.data_editor(
+        editable,
+        hide_index=True,
+        width="stretch",
+        key=f"{key}_{version}_{rows}",
+        disabled=[column for column in editable.columns if column != "category"],
+        column_config={
+            "id": None,
+            "date": st.column_config.DateColumn(t("col_date"), width=90),
+            "merchant": st.column_config.TextColumn(t("col_merchant"), width=180),
+            "amount": st.column_config.NumberColumn(t("col_amount"), format="localized", step=1, width=90),
+            "category": st.column_config.SelectboxColumn(
+                t("col_category"), options=[auto_label, *label_to_id], required=False, width=320
+            ),
+            "classified_by": st.column_config.TextColumn(t("col_source"), width=130),
+            "description": st.column_config.TextColumn(t("col_description"), width="medium"),
+            "txn_type": st.column_config.TextColumn(t("col_type"), width="small"),
+        },
+    )
+
+    overrides: dict[int, int] = {}
+    resets: list[int] = []
+    for row in edited.itertuples():
+        transaction_id = int(row.id)
+        if row.category == auto_label:
+            if transaction_id in manual_ids:
+                resets.append(transaction_id)
+        elif pd.notna(row.category) and label_to_id[row.category] != original_ids[transaction_id]:
+            overrides[transaction_id] = label_to_id[row.category]
+
+    pending = len(overrides) + len(resets)
+    with st.container(horizontal=True, vertical_alignment="center", key=f"{key}_bar"):
+        save = st.button(
+            t("classify_save"), type="primary", icon=":material/save:",
+            disabled=not pending, key=f"{key}_save_{version}",
+        )
+        if pending:
+            st.markdown(f":orange-badge[:material/edit: {t('classify_pending', count=pending)}]")
+        else:
+            st.caption(t("classify_hint"))
+    if save:
+        with engine().begin() as conn:
+            updated = set_transaction_categories(conn, overrides)
+            reset = reset_to_automatic(conn, resets)
+        messages = [t("classify_updated", count=updated)] if updated else []
+        if reset:
+            messages.append(t("classify_reset_n", count=reset))
+        st.session_state[flash_key] = " ".join(messages) or t("classify_no_changes")
+        st.session_state[f"{key}_version"] = version + 1
+        st.rerun()

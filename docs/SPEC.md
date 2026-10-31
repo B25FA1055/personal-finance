@@ -25,7 +25,11 @@ Local personal-finance tool for a single user on Windows. Periodic upload of Mon
 - transactions: id, account_id, import_id, txn_date, description, counterparty, bank_ref, amount (+in, -out), balance, txn_type, merchant_id, category_id, classified_by, note
 - category_budgets: category_id, budget_month, monthly_limit (one per expense category and month)
 - savings_goals: name, target_amount, current_amount, deadline, is_active
-- Budgets warn at 80% usage and show an exceeded alert when actual spending is over the limit.
+- goal_contributions: one savings transaction assigned to one goal (optionally to one of its funding sources); actual contributions can come from any imported account.
+- goal_funding_sources: goal_id, name, kind (monthly | lump_sum | loan), amount, start_month, end_month (NULL = until reached). Several per goal (salary share, partner, bonus, mortgage...).
+- Budgets warn at 80% usage and show an exceeded alert when actual spending is over the limit. Limits can be saved for the selected month and the next N months at once.
+- Budget vs actual (Төсөв ба гүйцэтгэл) table: one row per main category plus a Savings row (planned = goals' monthly + one-off sources due that month, loans excluded; actual = Хуримтлал transactions that month).
+- Goal progress = starting amount + assigned savings transactions (actual). Funding sources are plans: core.goals.project() adds them month by month from next month (one-offs/loans only if dated after today) to give the projected completion month, the amount planned by the deadline, the shortfall and the extra saving needed per month to close it.
 - Dashboard DTI is current-month-to-date debt-category payments divided by classified positive income; transfers are excluded. The safety cap is 45%, with safe (<35%), moderate (35%-45%), and high-risk (>45%) statuses.
 - Application features, including merchant categorization and the financial coach, run locally. No external AI API or API key is required; receipt details are entered manually.
 

@@ -11,7 +11,55 @@ from core.theme import palette, style_chart
 from core.ui import engine, fmt_mnt, page
 
 page("nav_reports", "📊", show_title=False)  # the title sits in the toolbar row below
-# Layout/spacing comes from the shared theme CSS (core/theme.py), same as every page.
+st.html(
+    """
+    <style>
+    /* No page top-padding override here: the header bar covers the top 3.75rem, so the
+       shared theme's 4rem is the minimum that keeps the title and presets visible. */
+    [class*="st-key-report_controls"] {
+      gap: 0.35rem !important;
+      margin-bottom: 0.1rem;
+    }
+    [class*="st-key-report_controls"] [data-testid="stHeading"] h1 {
+      font-size: 1.45rem !important;
+      line-height: 1.15;
+      margin: 0;
+      padding: 0;
+    }
+    [class*="st-key-report_controls"] [data-testid="stBaseButton"],
+    [class*="st-key-report_controls"] [data-testid="stDownloadButton"] button {
+      min-height: 2rem;
+      padding-top: 0.2rem;
+      padding-bottom: 0.2rem;
+    }
+    [class*="st-key-report_kpis"] [data-testid="stMetric"] {
+      min-height: 4.25rem;
+      padding: 0.25rem 0.4rem 0.2rem;
+    }
+    [class*="st-key-report_kpis"] [data-testid="stMetricLabel"],
+    [class*="st-key-report_kpis"] [data-testid="stMetricLabel"] p {
+      font-size: 13px !important;
+      line-height: 1.2;
+    }
+    [class*="st-key-report_kpis"] [data-testid="stMetricValue"] {
+      font-size: 18px !important;
+      line-height: 1.2;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    [class*="st-key-report_kpis"] [data-testid="stMetricDelta"],
+    [class*="st-key-report_kpis"] [data-testid="stMetricDeltaDescription"] {
+      font-size: 11px !important;
+      line-height: 1.15;
+    }
+    @media (max-width: 700px) {
+      [class*="st-key-report_controls"] [data-testid="stHeading"] h1 {
+        font-size: 1.3rem !important;
+      }
+    }
+    </style>
+    """
+)
 
 db = engine()
 
@@ -69,7 +117,7 @@ with st.container(horizontal=True, vertical_alignment="center", gap="small", key
     with st.container(horizontal=True, vertical_alignment="center", gap="small", width="content"):
         period = st.date_input(
             t("period"), key=PERIOD_KEY, format="YYYY-MM-DD", on_change=sync_preset,
-            label_visibility="collapsed", width=230,
+            label_visibility="collapsed", width=210,
         )
         complete = isinstance(period, tuple) and len(period) == 2
         if complete:
@@ -139,7 +187,7 @@ rate_delta = (
     else None
 )
 with st.container(key="report_kpis"):
-    cols = st.columns(4)  # equal-width cards; Streamlit stacks them on phone-sized screens
+    cols = st.columns(4, gap="small")  # equal-width cards; Streamlit stacks them on phone-sized screens
     cols[0].metric(
         t("m_total_income"), fmt_mnt(income), money_delta(income, prev_income),
         icon=":material/trending_up:", **compare,

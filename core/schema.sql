@@ -149,3 +149,55 @@ CREATE TABLE IF NOT EXISTS goal_contributions (
     transaction_id BIGINT NOT NULL UNIQUE REFERENCES transactions (id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Planned funding for a goal from several streams (salary share, partner, bonus, loan).
+-- kind monthly: amount every month from start_month to end_month (open-ended if NULL)
+-- kind lump_sum: a one-off amount expected in start_month
+-- kind loan: financing paid out in start_month (counts toward the goal, not as savings)
+CREATE TABLE IF NOT EXISTS goal_funding_sources (
+    id BIGSERIAL PRIMARY KEY,
+    goal_id BIGINT NOT NULL REFERENCES savings_goals (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('monthly', 'lump_sum', 'loan')),
+    amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
+    start_month DATE NOT NULL,
+    end_month DATE,
+    source_name TEXT,
+    monthly_amount NUMERIC(14, 2),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (goal_id, name)
+);
+
+-- Upgrade the earlier monthly-only goal_funding_sources schema without discarding plans.
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS kind TEXT;
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS amount NUMERIC(14, 2);
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS start_month DATE;
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS end_month DATE;
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS source_name TEXT;
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS monthly_amount NUMERIC(14, 2);
+ALTER TABLE goal_funding_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE goal_funding_sources ALTER COLUMN source_name DROP NOT NULL;
+ALTER TABLE goal_funding_sources ALTER COLUMN monthly_amount DROP NOT NULL;
+UPDATE goal_funding_sources
+SET name = COALESCE(name, source_name),
+    kind = COALESCE(kind, 'monthly'),
+    amount = COALESCE(amount, monthly_amount),
+    start_month = COALESCE(start_month, date_trunc('month', CURRENT_DATE)::date)
+WHERE name IS NULL OR kind IS NULL OR amount IS NULL OR start_month IS NULL;
+UPDATE goal_funding_sources
+SET source_name = COALESCE(source_name, name),
+    monthly_amount = CASE
+        WHEN kind = 'monthly' THEN COALESCE(monthly_amount, amount)
+        ELSE monthly_amount
+    END;
+ALTER TABLE goal_funding_sources ALTER COLUMN name SET NOT NULL;
+ALTER TABLE goal_funding_sources ALTER COLUMN kind SET NOT NULL;
+ALTER TABLE goal_funding_sources ALTER COLUMN amount SET NOT NULL;
+ALTER TABLE goal_funding_sources ALTER COLUMN start_month SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_funding_sources_goal_name
+    ON goal_funding_sources (goal_id, name);
+
+-- Which funding source an assigned savings transaction came from (optional).
+ALTER TABLE goal_contributions ADD COLUMN IF NOT EXISTS source_id BIGINT REFERENCES goal_funding_sources (id) ON DELETE SET NULL;

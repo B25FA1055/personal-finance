@@ -29,12 +29,6 @@ TEXTS: dict[str, dict[str, str]] = {
     "theme_emerald": {"mn": "Маргад ногоон", "en": "Emerald Green"},
     "theme_blue": {"mn": "Мэргэжлийн цэнхэр", "en": "Professional Blue"},
     "theme_modern_dark": {"mn": "Орчин үеийн бараан", "en": "Modern Dark"},
-    "theme_dark_tip": {
-        "mn": "Хүснэгт, огнооны сонголтыг бүрэн бараан болгохын тулд баруун дээд "
-        "⋮ → Settings → Theme → Dark-ийг сонгоно уу.",
-        "en": "For fully dark tables and date pickers, also choose ⋮ (top right) "
-        "→ Settings → Theme → Dark.",
-    },
     "db_error": {
         "mn": "Өгөгдлийн санд холбогдож чадсангүй. PostgreSQL ажиллаж байгаа эсэх, "
         ".env файлд зөв DATABASE_URL байгаа эсэхийг шалгана уу.\n\nДэлгэрэнгүй: {details}",
@@ -226,8 +220,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Showing up to 500 transactions · {count} shown",
     },
     "classify_no_match": {
-        "mn": "Хайлтад тохирох гүйлгээ алга.",
-        "en": "No transactions match this search.",
+        "mn": "Хайлт эсвэл шүүлтүүрт тохирох гүйлгээ алга.",
+        "en": "No transactions match this search or filter.",
     },
     "classify_no_categories": {
         "mn": "Идэвхтэй ангилал алга.",
@@ -262,6 +256,37 @@ TEXTS: dict[str, dict[str, str]] = {
         "mn": "{count} гүйлгээний ангиллыг шинэчиллээ.",
         "en": "Updated {count} transaction categories.",
     },
+    "classify_auto_option": {"mn": "↺ Автомат ангилал руу буцаах", "en": "↺ Back to automatic"},
+    "classify_pending": {"mn": "Хадгалаагүй {count} өөрчлөлт", "en": "{count} unsaved changes"},
+    "classify_hint": {
+        "mn": "Ангилал баганаас сонгож засна. Гараар сонгосон ангиллыг автомат ангилал дарж бичихгүй.",
+        "en": "Change a row in the Category column. Automatic classification never overwrites your choice.",
+    },
+    "classify_reset_n": {
+        "mn": "{count} гүйлгээг автомат ангилал руу буцаалаа.",
+        "en": "Reset {count} transactions to automatic.",
+    },
+    "classify_filter": {"mn": "Харуулах", "en": "Show"},
+    "classify_filter_all": {"mn": "Бүгд", "en": "All"},
+    "classify_filter_auto": {"mn": "Автомат", "en": "Automatic"},
+    "classify_filter_manual": {"mn": "Гараар", "en": "Manual"},
+    "classify_filter_review": {"mn": "Шалгах", "en": "To review"},
+    "cat_new": {"mn": "Шинэ ангилал", "en": "New category"},
+    "cat_name": {"mn": "Ангиллын нэр", "en": "Category name"},
+    "cat_place": {"mn": "Байршил", "en": "Place under"},
+    "cat_new_main": {"mn": "{kind} · Шинэ үндсэн ангилал", "en": "{kind} · New main category"},
+    "cat_create": {"mn": "Ангилал үүсгэх", "en": "Create category"},
+    "cat_created": {"mn": "Ангилал үүслээ: {name}.", "en": "Created category: {name}."},
+    "cat_err_name": {"mn": "Ангиллын нэр 1–60 тэмдэгт байна.", "en": "A category name needs 1 to 60 characters."},
+    "cat_err_exists": {"mn": "Ийм нэртэй ангилал аль хэдийн байна.", "en": "A category with this name already exists."},
+    "cat_err_parent": {"mn": "Идэвхтэй үндсэн ангилал сонгоно уу.", "en": "Choose an active main category."},
+    "cat_err_kind": {"mn": "Орлого, зарлага эсвэл шилжүүлэг сонгоно уу.", "en": "Choose income, expense or transfer."},
+    "upload_recent_title": {"mn": "Энэ удаа оруулсан гүйлгээ ({count})", "en": "Just imported ({count})"},
+    "upload_recent_help": {
+        "mn": "Автоматаар ангилсан. Буруу ангиллыг Ангилал баганаас засаад хадгална уу.",
+        "en": "Classified automatically. Fix any wrong category in the Category column, then save.",
+    },
+    "upload_recent_close": {"mn": "Хаах", "en": "Close"},
     "review_nothing": {
         "mn": "Шалгах зүйл алга: бүх гүйлгээ дүрмээр эсвэл таны сонголтоор ангилагдсан.",
         "en": "Nothing to review: every transaction was matched by a rule or set by you.",
@@ -429,11 +454,71 @@ TEXTS: dict[str, dict[str, str]] = {
     "goal_m_saved": {"mn": "Нийт хуримтлуулсан", "en": "Total saved"},
     "goal_m_target": {"mn": "Нийт зорилт", "en": "Total target"},
     "goal_m_monthly": {"mn": "Сард хадгалах шаардлагатай", "en": "Needed per month"},
+    "goal_m_planned": {"mn": "Төлөвлөсөн хуримтлал / сар", "en": "Planned savings per month"},
     "goal_monthly_help": {
         "mn": "Бүх зорилгодоо хугацаандаа хүрэхийн тулд сар бүр хадгалах дүн.",
         "en": "What to save each month to reach every goal on time.",
     },
     "goal_monthly_needed": {"mn": "Сард хадгалах", "en": "Save per month"},
+    "goal_planned_monthly": {"mn": "Төлөвлөсөн дүн / сар", "en": "Planned per month"},
+    "goal_projected_date": {"mn": "Төлөвлөсөн дуусах", "en": "Projected completion"},
+    "goal_funding_sources": {"mn": "Санхүүжилтийн эх үүсвэр", "en": "Funding sources"},
+    "goal_funding_help": {
+        "mn": "Цалин, нэмэлт орлого, нэг удаагийн урамшуулал эсвэл зээл зэрэг эх үүсвэрийг "
+        "нэмж болно. Төлөвлөгөө нь одоогийн хуримтлал биш; бодит орлогыг доорх хуримтлалын "
+        "гүйлгээгээр бүртгэнэ.",
+        "en": "Add sources such as salary, side income, a one-time bonus, or a loan. "
+        "These are planned amounts, not current savings; actual savings are tracked from "
+        "the transactions assigned below.",
+    },
+    "goal_funding_source": {"mn": "Эх үүсвэр", "en": "Source"},
+    "goal_funding_kind": {"mn": "Төрөл", "en": "Type"},
+    "goal_funding_kind_monthly": {"mn": "Сар бүр", "en": "Monthly"},
+    "goal_funding_kind_lump_sum": {"mn": "Нэг удаа", "en": "One-time"},
+    "goal_funding_kind_loan": {"mn": "Зээл", "en": "Loan"},
+    "goal_funding_amount": {"mn": "Дүн (₮)", "en": "Amount (₮)"},
+    "goal_funding_start": {"mn": "Эхлэх сар", "en": "Start month"},
+    "goal_funding_end": {"mn": "Дуусах сар", "en": "End month"},
+    "goal_funding_save": {"mn": "Эх үүсвэр хадгалах", "en": "Save funding plan"},
+    "goal_funding_incomplete": {
+        "mn": "Эх үүсвэр бүрийн нэр, төрөл, дүн, эхлэх сарыг бүрэн оруулна уу.",
+        "en": "Each funding source needs a name, type, amount, and start month.",
+    },
+    "goal_funding_saved": {"mn": "Санхүүжилтийн төлөвлөгөөг хадгаллаа.", "en": "Funding plan saved."},
+    "goal_plan_shortfall": {"mn": "Хугацааны дутагдал", "en": "Deadline shortfall"},
+    "goal_plan_status_done": {
+        "mn": "Зорилго биелсэн.",
+        "en": "Goal reached.",
+    },
+    "goal_plan_status_no_plan": {
+        "mn": "Санхүүжилтийн төлөвлөгөө оруулаагүй.",
+        "en": "No funding plan entered.",
+    },
+    "goal_plan_status_covered": {
+        "mn": "Төлөвлөсөн эх үүсвэр хугацаанд хүрнэ.",
+        "en": "Planned sources cover the goal by the deadline.",
+    },
+    "goal_plan_status_gap": {
+        "mn": "Хугацаанд хүрэхэд {amount} дутна; сард нэмэлт {extra} хадгалах шаардлагатай.",
+        "en": "{amount} is still unfunded by the deadline; save an extra {extra} per month.",
+    },
+    "goal_savings_plan_met": {
+        "mn": "Энэ сарын хуримтлалын төлөвлөгөө биелсэн.",
+        "en": "This month's savings plan is met.",
+    },
+    "goal_savings_plan_remaining": {
+        "mn": "Энэ сарын төлөвлөгөөг биелүүлэхэд {amount} дутуу байна.",
+        "en": "{amount} remains to meet this month's plan.",
+    },
+    "goal_savings_unplanned": {
+        "mn": "Энэ сард {amount} хуримтлуулсан боловч төлөвлөгөө тохируулаагүй байна.",
+        "en": "{amount} saved this month without a planned savings allocation.",
+    },
+    "assign_funding_source": {"mn": "Эх үүсвэр", "en": "Funding source"},
+    "assign_source_goal_mismatch": {
+        "mn": "Сонгосон эх үүсвэр нь сонгосон зорилгод хамаарахгүй байна.",
+        "en": "The selected funding source does not belong to the selected goal.",
+    },
     "goal_months_left": {"mn": "Үлдсэн сар", "en": "Months left"},
     "goal_status_done": {"mn": "Биелсэн", "en": "Reached"},
     "goal_status_ahead": {"mn": "Төлөвлөгөөнөөс түрүүлсэн", "en": "Ahead"},

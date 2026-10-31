@@ -15,6 +15,11 @@ from core.budget_service import (
     save_monthly_budgets,
     update_savings_goal,
 )
+from core.goals import (
+    list_goal_funding_sources,
+    monthly_funding_totals,
+    save_goal_funding_sources,
+)
 
 
 @pytest.fixture
@@ -51,10 +56,18 @@ def budget_db():
         )
         conn.execute(
             text(
+                "CREATE TABLE goal_funding_sources (id INTEGER PRIMARY KEY, goal_id INTEGER, "
+                "name TEXT, kind TEXT, amount NUMERIC, start_month DATE, end_month DATE, "
+                "source_name TEXT, monthly_amount NUMERIC, UNIQUE(goal_id, name))"
+            )
+        )
+        conn.execute(
+            text(
                 "INSERT INTO categories (id, name, kind, is_active) VALUES "
                 "(1, 'Хоол хүнс', 'expense', TRUE), "
                 "(2, 'Тээвэр', 'expense', TRUE), "
-                "(3, 'Дотоод шилжүүлэг', 'transfer', TRUE)"
+                "(3, 'Дотоод шилжүүлэг', 'transfer', TRUE), "
+                "(4, 'Хуримтлал', 'transfer', TRUE)"
             )
         )
         conn.execute(
@@ -65,7 +78,8 @@ def budget_db():
                 "(3, 1, '2026-06-01', -500), "
                 "(4, 2, '2026-05-20', -100), "
                 "(5, 3, '2026-05-20', -900), "
-                "(6, NULL, '2026-05-20', -50)"
+                "(6, NULL, '2026-05-20', -50), "
+                "(7, 4, '2026-05-10', -400)"
             )
         )
     try:
@@ -168,6 +182,119 @@ def test_copy_previous_month_budgets_keeps_existing_limits(budget_db) -> None:
         assert june[1] == Decimal("1000.00")
         assert june[2] == Decimal("300.00")  # not overwritten
         assert copy_previous_month_budgets(conn, date(2026, 6, 1)) == 0  # idempotent
+
+
+def test_future_month_budgets_can_be_saved(budget_db) -> None:
+    with budget_db.begin() as conn:
+        assert save_monthly_budgets(conn, date(2027, 2, 15), {1: Decimal("1200")}) == 1
+        food = next(
+            item
+            for item in monthly_budget_progress(conn, date(2027, 2, 1))
+            if item["category_id"] == 1
+        )
+
+    assert food["monthly_limit"] == Decimal("1200.00")
+    assert food["spent"] == Decimal("0.00")
+
+
+def test_goal_funding_sources_support_multiple_streams(budget_db) -> None:
+    with budget_db.begin() as conn:
+        goal_id = create_savings_goal(
+            conn, "House deposit", Decimal("100000"), Decimal("10000"), date(2028, 1, 1)
+        )
+        count = save_goal_funding_sources(
+            conn,
+            goal_id,
+            [
+                {
+                    "name": "Salary",
+                    "kind": "monthly",
+                    "amount": Decimal("20000"),
+                    "start_month": date(2026, 12, 10),
+                    "end_month": date(2027, 5, 28),
+                },
+                {
+                    "name": "Bonus",
+                    "kind": "lump_sum",
+                    "amount": Decimal("5000"),
+                    "start_month": date(2027, 2, 1),
+                    "end_month": None,
+                },
+            ],
+        )
+        sources = list_goal_funding_sources(conn, goal_id)
+
+    assert count == 2
+    assert [source["name"] for source in sources] == ["Bonus", "Salary"]
+    assert sources[1]["start_month"] == date(2026, 12, 1)
+    assert sources[1]["end_month"] == date(2027, 5, 1)
+
+
+def test_goal_funding_sources_reject_duplicates_and_invalid_schedules(budget_db) -> None:
+    with budget_db.begin() as conn:
+        goal_id = create_savings_goal(
+            conn, "Car", Decimal("100000"), Decimal("0"), date(2028, 1, 1)
+        )
+        with pytest.raises(ValueError, match="unique"):
+            save_goal_funding_sources(
+                conn,
+                goal_id,
+                [
+                    {"name": "Salary", "kind": "monthly", "amount": 1000, "start_month": date(2027, 1, 1)},
+                    {"name": "salary", "kind": "monthly", "amount": 1000, "start_month": date(2027, 1, 1)},
+                ],
+            )
+        with pytest.raises(ValueError, match="before"):
+            save_goal_funding_sources(
+                conn,
+                goal_id,
+                [
+                    {
+                        "name": "Salary",
+                        "kind": "monthly",
+                        "amount": 1000,
+                        "start_month": date(2027, 2, 1),
+                        "end_month": date(2027, 1, 1),
+                    }
+                ],
+            )
+
+
+def test_savings_budget_compares_planned_sources_with_actual_transfers(budget_db) -> None:
+    with budget_db.begin() as conn:
+        goal_id = create_savings_goal(
+            conn, "House", Decimal("10000"), Decimal("0"), date(2027, 12, 31)
+        )
+        save_goal_funding_sources(
+            conn,
+            goal_id,
+            [
+                {
+                    "name": "Salary",
+                    "kind": "monthly",
+                    "amount": Decimal("500"),
+                    "start_month": date(2026, 5, 1),
+                    "end_month": None,
+                },
+                {
+                    "name": "Bonus",
+                    "kind": "lump_sum",
+                    "amount": Decimal("100"),
+                    "start_month": date(2026, 5, 1),
+                    "end_month": None,
+                },
+                {
+                    "name": "Loan",
+                    "kind": "loan",
+                    "amount": Decimal("1000"),
+                    "start_month": date(2026, 5, 1),
+                    "end_month": None,
+                },
+            ],
+        )
+        totals = monthly_funding_totals(conn, date(2026, 5, 20))
+
+    assert totals == {"planned": Decimal("600"), "actual": Decimal("400")}
 
 
 def test_months_between_spans_year_end() -> None:

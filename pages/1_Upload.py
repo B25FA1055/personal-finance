@@ -10,13 +10,13 @@ import streamlit as st
 
 from core import reports
 from core.budget_service import expense_categories, import_months
-from core.classify_service import unclassified_counts
+from core.classify_service import classification_transactions, unclassified_counts
 from core.i18n import category_name, t
 from core.importer import BANK_NAMES, import_file
 from core.parsers import BANK_CODES, UnknownBankError
 from core.receipt_ocr import receipt_ref
 from core.receipt_service import possible_duplicates, receipt_saved, save_receipt
-from core.ui import engine, fmt_mnt, page, show_budget_alerts
+from core.ui import category_editor, category_options, engine, fmt_mnt, page, show_budget_alerts
 
 page("nav_upload", "📤")
 
@@ -86,6 +86,23 @@ with tab_statements:
         with db.connect() as conn:
             for month in months:
                 show_budget_alerts(conn, month)
+        if imported_ids:  # kept across reruns so the category table below stays open
+            st.session_state["last_import_ids"] = imported_ids
+
+    # The rows just imported, already auto-classified: fix any category right here.
+    if last_import_ids := st.session_state.get("last_import_ids"):
+        with db.connect() as conn:
+            recent = classification_transactions(conn, limit=2000, import_ids=last_import_ids)
+            categories = category_options(conn)
+        if not recent.empty and categories:
+            with st.container(border=True, key="card_recent_import"):
+                with st.container(horizontal=True, vertical_alignment="center"):
+                    st.markdown(f"**{t('upload_recent_title', count=len(recent))}**")
+                    if st.button(t("upload_recent_close"), icon=":material/close:", type="tertiary"):
+                        st.session_state.pop("last_import_ids")
+                        st.rerun()
+                st.caption(t("upload_recent_help"))
+                category_editor(recent, categories, key="upload_editor", flash_key="upload_flash")
 
     st.subheader(t("upload_history"))
     with db.connect() as conn:

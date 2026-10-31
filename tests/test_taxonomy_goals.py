@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from core.classifier import Ctx, Rule, classify
-from core.goals import evaluate, months_left
+from core.goals import evaluate, months_left, project
 from core.seed import SEED_RULES, TAXONOMY
 
 # Category ids stand in as names, so assertions read naturally.
@@ -111,3 +111,49 @@ def test_monthly_needed() -> None:
     result = evaluate(Decimal("1200000"), Decimal("0"), date(2026, 10, 21), date(2027, 10, 21), date(2026, 10, 21))
     assert result["months_left"] == 12
     assert result["monthly_needed"] == Decimal("100000")
+
+
+def test_multiple_goal_funding_sources_project_completion_and_shortfall() -> None:
+    today = date(2026, 1, 15)
+    result = project(
+        Decimal("1000"),
+        Decimal("100"),
+        [
+            {
+                "name": "Salary",
+                "kind": "monthly",
+                "amount": Decimal("100"),
+                "start_month": date(2026, 1, 1),
+                "end_month": date(2026, 3, 1),
+            },
+            {
+                "name": "Side income",
+                "kind": "monthly",
+                "amount": Decimal("50"),
+                "start_month": date(2026, 2, 1),
+                "end_month": date(2026, 7, 1),
+            },
+            {
+                "name": "Bonus",
+                "kind": "lump_sum",
+                "amount": Decimal("300"),
+                "start_month": date(2026, 4, 1),
+            },
+            {
+                "name": "Mortgage",
+                "kind": "loan",
+                "amount": Decimal("100"),
+                "start_month": date(2026, 6, 1),
+            },
+        ],
+        today,
+        date(2026, 6, 30),
+    )
+
+    assert result["monthly_plan"] == Decimal("150")
+    assert result["loan_total"] == Decimal("100")
+    assert result["planned_by_deadline"] == Decimal("850")
+    assert result["shortfall"] == Decimal("50")
+    assert result["extra_per_month"] == Decimal("10")
+    assert result["projected_month"] == date(2026, 7, 1)
+    assert result["plan_status"] == "gap"

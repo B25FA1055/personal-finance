@@ -38,6 +38,17 @@ def test_css_uses_palette_colours() -> None:
     assert css.count("{") == css.count("}")
 
 
+def test_dark_theme_styles_nested_input_wrappers_and_popovers() -> None:
+    css = _css(THEMES["dark"])
+    assert '[data-baseweb="input"] > div' in css
+    assert '[data-baseweb="select"] > div' in css
+    assert '[data-testid="stTextArea"] > div' in css
+    assert '[data-testid="stTextArea"] textarea' in css
+    assert '[data-testid="stDateInputCalendar"]' in css
+    assert "background-color: var(--ft-secondary) !important" in css
+    assert "color: var(--ft-text) !important" in css
+
+
 def test_style_chart_sets_category_colours() -> None:
     chart = alt.Chart(pd.DataFrame({"a": ["x"], "b": [1]})).mark_bar().encode(x="a", y="b")
     spec = style_chart(chart).to_dict()

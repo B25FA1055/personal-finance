@@ -4,38 +4,65 @@ import pandas as pd
 import streamlit as st
 
 from core.classify_service import (
+    CATEGORY_KINDS,
+    SOURCE_FILTERS,
     assign_group,
     classification_transactions,
-    set_transaction_categories,
+    create_category,
+    main_categories,
     unclassified_counts,
     unclassified_groups,
 )
 from core.i18n import category_name, t
-from core.ui import category_options, engine, page
+from core.ui import category_editor, category_options, engine, page
 
 page("classify_title", "🏷️")
 
 db = engine()
 if flash := st.session_state.pop("classify_flash", None):
-    st.success(flash)
+    st.success(flash, icon=":material/check_circle:")
 
-search = st.text_input(t("classify_search"))
+with db.connect() as conn:
+    mains = main_categories(conn)
+
+# Toolbar: search, which rows to show, and a new custom category.
+with st.container(horizontal=True, vertical_alignment="bottom", key="classify_toolbar"):
+    search = st.text_input(t("classify_search"), width=320)
+    source = st.segmented_control(
+        t("classify_filter"), SOURCE_FILTERS, default="all",
+        format_func=lambda code: t(f"classify_filter_{code}"),
+    ) or "all"
+    with st.popover(t("cat_new"), icon=":material/add:"):
+        # A new main category per kind, or a subcategory under an existing main one.
+        placements = [(None, kind) for kind in CATEGORY_KINDS] + [(cid, kind) for cid, kind, _ in mains]
+        main_names = {cid: name for cid, _, name in mains}
+        with st.form("new_category", clear_on_submit=True, border=False):
+            new_name = st.text_input(t("cat_name"), max_chars=60)
+            parent_id, kind = st.selectbox(
+                t("cat_place"), placements,
+                format_func=lambda p: t("cat_new_main", kind=t(f"kind_{p[1]}")) if p[0] is None
+                else f"{t('kind_' + p[1])} · {category_name(main_names[p[0]])} › …",
+            )
+            create = st.form_submit_button(t("cat_create"), type="primary")
+        if create:
+            try:
+                with db.begin() as conn:
+                    create_category(conn, new_name, kind, parent_id)
+            except ValueError as exc:
+                st.error(t(str(exc)))
+            else:
+                st.session_state["classify_flash"] = t("cat_created", name=" ".join(new_name.split()))
+                st.rerun()
+
 with db.connect() as conn:
     pending, group_count = unclassified_counts(conn)
     groups = unclassified_groups(conn)
-    transactions = classification_transactions(conn, search=search)
+    transactions = classification_transactions(conn, search=search, source=source)
     categories = category_options(conn)
 
 # Labels are translated, so the editors work with labels and map back to ids.
 label_to_id = {label: category_id for category_id, label in categories}
-id_to_label = {category_id: label for category_id, label in categories}
 type_labels = {code: t(f"type_{code}") for code in ("pos", "qpay", "transfer", "fee", "cash", "other")}
-source_labels = {
-    "Automatic rule": t("src_rule"),
-    "Automatic default": t("src_merchant"),
-    "Manual": t("src_manual"),
-    "Unclassified": t("src_none"),
-}
 
 tabs = st.tabs([t("tab_transactions"), t("tab_review", count=int(pending))])
 with tabs[0]:
@@ -45,60 +72,7 @@ with tabs[0]:
     elif not categories:
         st.warning(t("classify_no_categories"))
     else:
-        original_ids = {
-            int(row.id): None if pd.isna(row.category_id) else int(row.category_id)
-            for row in transactions.itertuples()
-        }
-        editable = pd.DataFrame(
-            {
-                "id": transactions["id"],
-                "date": transactions["date"],
-                "merchant": transactions["merchant"],
-                "description": transactions["description"],
-                "txn_type": transactions["txn_type"].map(type_labels).fillna(transactions["txn_type"]),
-                "amount": transactions["amount"].astype(float),
-                "category": [id_to_label.get(original_ids[int(i)]) for i in transactions["id"]],
-                "classified_by": transactions["classified_by"].map(source_labels),
-            }
-        )
-        changed = st.data_editor(
-            editable,
-            hide_index=True,
-            width="stretch",
-            key=f"transactions_{st.session_state.get('transaction_version', 0)}",
-            disabled=[column for column in editable.columns if column != "category"],
-            column_config={
-                "id": None,
-                "date": st.column_config.DateColumn(t("col_date")),
-                "merchant": t("col_merchant"),
-                "description": t("col_description"),
-                "txn_type": t("col_type"),
-                "amount": st.column_config.NumberColumn(
-                    t("col_amount"), format="localized", step=1
-                ),
-                "category": st.column_config.SelectboxColumn(
-                    t("col_category"), options=list(label_to_id), required=False
-                ),
-                "classified_by": t("col_source"),
-            },
-        )
-        if st.button(t("classify_save"), type="primary"):
-            category_changes = {
-                int(row.id): label_to_id[row.category]
-                for row in changed.itertuples()
-                if pd.notna(row.category)
-                and label_to_id[row.category] != original_ids[int(row.id)]
-            }
-            if not category_changes:
-                st.info(t("classify_no_changes"))
-            else:
-                with db.begin() as conn:
-                    updated = set_transaction_categories(conn, category_changes)
-                st.session_state["classify_flash"] = t("classify_updated", count=updated)
-                st.session_state["transaction_version"] = (
-                    st.session_state.get("transaction_version", 0) + 1
-                )
-                st.rerun()
+        category_editor(transactions, categories, key="classify_editor", flash_key="classify_flash")
 
 with tabs[1]:
     if not pending:
